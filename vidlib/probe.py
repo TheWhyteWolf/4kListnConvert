@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """ffprobe/ffmpeg discovery and metadata extraction."""
 
 from __future__ import annotations

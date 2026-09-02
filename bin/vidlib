@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Launcher: prefers the local .venv (needed for the TUI) and otherwise falls
 # back to the system Python, which is enough for every CLI command.
 set -euo pipefail

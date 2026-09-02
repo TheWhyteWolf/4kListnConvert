@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Formatting and small shared helpers. Stdlib only."""
 
 from __future__ import annotations

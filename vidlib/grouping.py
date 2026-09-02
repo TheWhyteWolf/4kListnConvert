@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Grouping, filtering and duplicate detection over a set of VideoFiles."""
 
 from __future__ import annotations

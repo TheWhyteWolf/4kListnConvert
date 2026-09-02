@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Disposal of source files after a successful conversion.
 
 Three modes: freedesktop trash (default, recoverable), a quarantine directory,

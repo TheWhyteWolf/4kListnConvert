@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Planning, running and verifying 4K -> 1080p conversions."""
 
 from __future__ import annotations

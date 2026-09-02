@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """The VideoFile record and everything derived from it."""
 
 from __future__ import annotations

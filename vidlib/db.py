@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """SQLite-backed library cache, selection set and conversion job queue.
 
 Probing a large library is slow, so results are cached and only re-probed when

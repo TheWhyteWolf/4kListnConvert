@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Recursive discovery of video files, with cached parallel probing."""
 
 from __future__ import annotations

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """User configuration, stored as TOML under XDG_CONFIG_HOME."""
 
 from __future__ import annotations

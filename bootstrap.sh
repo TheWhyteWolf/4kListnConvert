@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Create a local virtualenv with the optional TUI dependency.
 # The CLI itself needs nothing but Python 3.11+ and ffmpeg.
 set -euo pipefail

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Textual terminal UI: browse the library, pick files, convert them."""
 
 from __future__ import annotations

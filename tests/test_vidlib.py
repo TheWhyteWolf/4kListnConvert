@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Test suite for vidlib. Run with:  python3 -m unittest discover -s tests -v
 
 Tests that need ffmpeg generate their own tiny fixtures and are skipped

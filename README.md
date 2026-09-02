@@ -128,3 +128,7 @@ python3 -m unittest discover -s tests -v
 Covers classification, naming, filtering, the database, the trash implementation
 and real ffmpeg conversions — including the destructive paths: a rejected,
 cancelled or failed encode must all leave the source intact.
+
+## License
+
+GPL-3.0-or-later — see [LICENSE](LICENSE).
