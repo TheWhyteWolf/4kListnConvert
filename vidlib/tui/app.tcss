@@ -1,0 +1,91 @@
+Screen {
+    layers: base overlay;
+}
+
+#controls {
+    height: 3;
+    padding: 0 1;
+    background: $panel;
+}
+
+#controls Select {
+    width: 26;
+    margin-right: 1;
+}
+
+#controls Input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+#controls Checkbox {
+    width: auto;
+    margin-right: 1;
+}
+
+#tree {
+    height: 1fr;
+    padding: 0 1;
+    scrollbar-size-vertical: 1;
+}
+
+#status {
+    height: 2;
+    padding: 0 1;
+    background: $panel;
+    color: $text;
+    border-top: solid $primary;
+}
+
+.dim {
+    color: $text-muted;
+}
+
+/* --- settings dialog --- */
+
+SettingsScreen {
+    align: center middle;
+}
+
+#dialog {
+    width: 72;
+    height: auto;
+    padding: 1 2;
+    background: $surface;
+    border: thick $primary;
+}
+
+#dialog Label {
+    margin-top: 1;
+}
+
+#dialog .hint {
+    color: $text-muted;
+}
+
+#dialog-buttons {
+    height: auto;
+    margin-top: 1;
+    align-horizontal: right;
+}
+
+#dialog-buttons Button {
+    margin-left: 1;
+}
+
+/* --- conversion screen --- */
+
+#convert-body {
+    padding: 1 2;
+}
+
+#convert-log {
+    height: 1fr;
+    border: round $primary;
+    padding: 0 1;
+}
+
+#convert-current {
+    height: auto;
+    padding: 1 0;
+}

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Launcher: prefers the local .venv (needed for the TUI) and otherwise falls
+# back to the system Python, which is enough for every CLI command.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if [ -x "$here/.venv/bin/python" ]; then
+    python="$here/.venv/bin/python"
+else
+    python="$(command -v python3 || true)"
+    if [ -z "$python" ]; then
+        echo "error: python3 not found on PATH" >&2
+        exit 1
+    fi
+fi
+
+PYTHONPATH="$here${PYTHONPATH:+:$PYTHONPATH}" exec "$python" -m vidlib.cli "$@"
