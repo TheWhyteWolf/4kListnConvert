@@ -15,6 +15,7 @@ from pathlib import Path
 from . import trash
 from .models import VideoFile
 from .probe import ffmpeg_bin, probe_file
+from .subtitles import SidecarSubtitle, find_sidecar_subtitles, is_english
 from .util import human_size
 
 TMP_SUFFIX = ".vidlib-tmp"
@@ -160,7 +161,11 @@ class ConversionPlan:
     copy_audio: bool = True
     audio_codec: str = "aac"
     audio_bitrate: str = "192k"
+    audio_channels: int | None = None   # force e.g. 2 for stereo; None keeps source
     copy_subs: bool = True
+    subtitle_track_indices: list[int] = field(default_factory=list)
+    external_subtitles: list[Path] = field(default_factory=list)
+    discarded_subtitles: list[Path] = field(default_factory=list)
     disposal: str = trash.TRASH
     quarantine_dir: str | None = None
     extra_args: list[str] = field(default_factory=list)
@@ -194,6 +199,41 @@ def decide_hdr_handling(
     return (False, True) if can_keep_hdr else (True, False)
 
 
+def plan_subtitles(
+    video: VideoFile, *, copy_subs: bool = True, sub_language: str | None = "eng",
+) -> tuple[list[int], list[Path], list[Path]]:
+    """Decide which subtitles travel to the output and which are dropped.
+
+    Returns (embedded stream indices to keep, external files to mux in,
+    external files to discard). `sub_language=None` disables language
+    filtering and keeps everything `copy_subs` would have copied before.
+    """
+    if not copy_subs:
+        return [], [], []
+
+    def wanted(language: str | None) -> bool:
+        if sub_language is None:
+            return True
+        if sub_language == "eng":
+            return is_english(language)
+        return (language or "").strip().lower() == sub_language.lower()
+
+    kept_indices = [t.index for t in video.subtitle_tracks if wanted(t.language)]
+
+    sidecars = find_sidecar_subtitles(video.path)
+    if sub_language is None:
+        kept_sidecars = sidecars
+        dropped_sidecars: list[SidecarSubtitle] = []
+    elif sub_language == "eng":
+        kept_sidecars = [s for s in sidecars if s.is_english]
+        dropped_sidecars = [s for s in sidecars if not s.is_english]
+    else:
+        kept_sidecars = [s for s in sidecars if (s.language or "").lower() == sub_language.lower()]
+        dropped_sidecars = [s for s in sidecars if s not in kept_sidecars]
+
+    return kept_indices, [s.path for s in kept_sidecars], [s.path for s in dropped_sidecars]
+
+
 def plan_conversion(
     video: VideoFile,
     *,
@@ -205,7 +245,9 @@ def plan_conversion(
     copy_audio: bool = True,
     audio_codec: str = "aac",
     audio_bitrate: str = "192k",
+    audio_channels: int | None = None,
     copy_subs: bool = True,
+    sub_language: str | None = "eng",
     disposal: str = trash.TRASH,
     quarantine_dir: str | None = None,
     container: str | None = None,
@@ -219,6 +261,11 @@ def plan_conversion(
         Path(video.path), target_height, encoder=encoder,
         tonemapped=do_tonemap, retag_codec=retag_codec, container=container,
     )
+    sub_indices, keep_subs, drop_subs = plan_subtitles(
+        video, copy_subs=copy_subs, sub_language=sub_language,
+    )
+    # Changing the channel count is not something "-c:a copy" can do.
+    effective_copy_audio = copy_audio and not audio_channels
     return ConversionPlan(
         source=video,
         destination=destination,
@@ -229,10 +276,14 @@ def plan_conversion(
         target_height=target_height,
         tonemap=do_tonemap,
         preserve_hdr=keep_hdr,
-        copy_audio=copy_audio,
+        copy_audio=effective_copy_audio,
         audio_codec=audio_codec,
         audio_bitrate=audio_bitrate,
+        audio_channels=audio_channels,
         copy_subs=copy_subs,
+        subtitle_track_indices=sub_indices,
+        external_subtitles=keep_subs,
+        discarded_subtitles=drop_subs,
         disposal=disposal,
         quarantine_dir=quarantine_dir,
     )
@@ -266,15 +317,26 @@ def build_command(plan: ConversionPlan, *, drop_subs: bool = False) -> list[str]
     """Assemble the full ffmpeg invocation for a plan."""
     spec = plan.spec
     src = plan.source
-    cmd = [
-        ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-        "-i", src.path,
-        # Explicit maps: take one video stream (skipping cover art), plus every
-        # audio, subtitle and attachment stream that exists.
-        "-map", "0:v:0", "-map", "0:a?",
-    ]
+    # External English subtitle files are extra inputs; mkv/mp4 both accept
+    # subtitle-only sidecar inputs muxed in alongside the main stream.
+    external_subs = [] if drop_subs else plan.external_subtitles
+    cmd = [ffmpeg_bin(), "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", src.path]
+    for sub_path in external_subs:
+        cmd += ["-i", str(sub_path)]
+
+    # Explicit maps: take one video stream (skipping cover art), plus every
+    # audio stream that exists.
+    cmd += ["-map", "0:v:0", "-map", "0:a?"]
+
+    n_sub_outputs = 0
     if plan.copy_subs and not drop_subs:
-        cmd += ["-map", "0:s?"]
+        for index in plan.subtitle_track_indices:
+            cmd += ["-map", f"0:{index}?"]
+            n_sub_outputs += 1
+        for input_index in range(1, len(external_subs) + 1):
+            cmd += ["-map", f"{input_index}:0"]
+            n_sub_outputs += 1
+
     cmd += ["-map", "0:t?", "-map_chapters", "0", "-map_metadata", "0"]
 
     cmd += ["-c", "copy", "-c:v", spec.name, spec.quality_flag, str(plan.quality)]
@@ -311,6 +373,15 @@ def build_command(plan: ConversionPlan, *, drop_subs: bool = False) -> list[str]
 
     if not plan.copy_audio:
         cmd += ["-c:a", plan.audio_codec, "-b:a", plan.audio_bitrate]
+        if plan.audio_channels:
+            cmd += ["-ac", str(plan.audio_channels)]
+
+    # External subtitle inputs are plain text files (ffmpeg demuxes them as
+    # "subrip"); force srt explicitly rather than rely on "-c copy", which
+    # only matches when the input stream's own codec already equals output.
+    first_external_sub_output = n_sub_outputs - len(external_subs)
+    for offset in range(len(external_subs)):
+        cmd += [f"-c:s:{first_external_sub_output + offset}", "srt"]
 
     cmd += plan.extra_args
     cmd += ["-progress", "pipe:1", "-nostats", str(plan.temp)]
@@ -507,6 +578,14 @@ def run_conversion(
             plan=plan, ok=True, output=plan.destination, output_size=output_size,
             elapsed=elapsed, disposal=f"source kept ({exc})",
         )
+
+    # Non-English sidecar subtitles are no longer wanted once the English
+    # one has been muxed in; best-effort only, never fails the conversion.
+    for discarded in plan.discarded_subtitles:
+        try:
+            trash.dispose(discarded, plan.disposal, quarantine_dir=plan.quarantine_dir)
+        except trash.DisposalError:
+            pass
 
     return ConversionResult(
         plan=plan, ok=True, output=plan.destination, output_size=output_size,

@@ -27,9 +27,12 @@ from vidlib.db import Library
 from vidlib.grouping import (
     Filter, display_group_name, find_duplicates, group_files, summarize,
 )
-from vidlib.models import VideoFile, classify_hdr, classify_resolution, bit_depth_from_pix_fmt
+from vidlib.models import (
+    SubtitleTrack, VideoFile, classify_hdr, classify_resolution, bit_depth_from_pix_fmt,
+)
 from vidlib.probe import probe_file
 from vidlib.scanner import scan, walk_videos
+from vidlib.subtitles import find_sidecar_subtitles, is_english
 from vidlib.util import human_duration, human_size, parse_size, render_table, truncate
 
 HAVE_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
@@ -56,6 +59,37 @@ def make_video(path: Path, width: int, height: int, *, codec: str = "libx264",
         cmd += ["-c:a", "aac", "-b:a", "64k"]
     cmd += [str(path)]
     subprocess.run(cmd, check=True, capture_output=True)
+    return path
+
+
+def make_subtitle(path: Path, text: str = "1\n00:00:00,000 --> 00:00:01,000\nHello\n") -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def make_video_with_subtitles(path: Path, langs: list[str | None], *, width: int = 640,
+                              height: int = 360, duration: float = 1.0) -> Path:
+    """A video with one embedded subtitle stream per entry in `langs`
+    (None leaves that stream untagged)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    srt_paths = [make_subtitle(path.parent / f"{path.stem}.tmp{i}.srt") for i in range(len(langs))]
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+           "-f", "lavfi", "-i", f"testsrc2=size={width}x{height}:rate=24:duration={duration}",
+           "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration}"]
+    for srt in srt_paths:
+        cmd += ["-i", str(srt)]
+    cmd += ["-map", "0:v", "-map", "1:a"]
+    cmd += [arg for i in range(len(langs)) for arg in ("-map", f"{i + 2}:0")]
+    cmd += ["-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "ultrafast",
+            "-c:a", "aac", "-b:a", "64k", "-c:s", "srt"]
+    for i, lang in enumerate(langs):
+        if lang:
+            cmd += [f"-metadata:s:s:{i}", f"language={lang}"]
+    cmd += [str(path)]
+    subprocess.run(cmd, check=True, capture_output=True)
+    for srt in srt_paths:
+        srt.unlink(missing_ok=True)
     return path
 
 
@@ -587,6 +621,141 @@ class TestConversion(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertTrue(src.exists())
         self.assertFalse(plan.temp.exists())
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_embedded_subtitles_filtered_to_english_by_default(self):
+        src = make_video_with_subtitles(self.box / "Subs.mkv", ["eng", "fre"])
+        video = probe_file(src)
+        self.assertEqual(len(video.subtitle_tracks), 2)
+        _, result = self.convert(src, target_height=180, disposal="keep")
+        self.assertTrue(result.ok, result.error)
+        out = probe_file(result.output)
+        self.assertEqual(out.n_subs, 1)
+        self.assertEqual(out.sub_langs, ["eng"])
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_embedded_untagged_subtitle_kept_by_default(self):
+        src = make_video_with_subtitles(self.box / "Untagged.mkv", [None, "spa"])
+        _, result = self.convert(src, target_height=180, disposal="keep")
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(probe_file(result.output).n_subs, 1)
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_sub_language_none_keeps_every_subtitle(self):
+        src = make_video_with_subtitles(self.box / "All.mkv", ["eng", "fre"])
+        _, result = self.convert(src, target_height=180, disposal="keep", sub_language=None)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(probe_file(result.output).n_subs, 2)
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_external_english_subtitle_muxed_in_and_foreign_discarded(self):
+        src = make_video(self.box / "Ext.mkv", 640, 360)
+        make_subtitle(self.box / "Ext.srt")
+        make_subtitle(self.box / "Ext.fr.srt")
+        _, result = self.convert(src, target_height=180, disposal="trash")
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(probe_file(result.output).n_subs, 1)
+        self.assertFalse((self.box / "Ext.fr.srt").exists(),
+                         "the French sidecar should have been trashed with the source")
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_stereo_downmix_forces_two_channels(self):
+        src = self.box / "Surround.mkv"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-ac", "6", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "384k",
+            str(src),
+        ], check=True, capture_output=True)
+        self.assertEqual(probe_file(src).achannels, 6)
+        _, result = self.convert(src, target_height=180, disposal="keep", audio_channels=2)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(probe_file(result.output).achannels, 2)
+
+    @unittest.skipUnless(HAVE_FFMPEG, "needs ffmpeg")
+    def test_lossless_copy_is_overridden_by_audio_channels(self):
+        """copy_audio=True can't change the channel count; audio_channels
+        must win, not silently be ignored."""
+        src = self.box / "Copy.mkv"
+        src.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run([
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=24:duration=1",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=1",
+            "-ac", "6", "-pix_fmt", "yuv420p",
+            "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-b:a", "384k",
+            str(src),
+        ], check=True, capture_output=True)
+        _, result = self.convert(src, target_height=180, disposal="keep",
+                                 copy_audio=True, audio_channels=2)
+        self.assertTrue(result.ok, result.error)
+        self.assertEqual(probe_file(result.output).achannels, 2)
+
+
+class TestSubtitleSelection(unittest.TestCase):
+    """Pure logic: no ffmpeg needed, so these always run."""
+
+    def test_is_english(self):
+        self.assertTrue(is_english(None))
+        self.assertTrue(is_english(""))
+        self.assertTrue(is_english("und"))
+        self.assertTrue(is_english("eng"))
+        self.assertTrue(is_english("en"))
+        self.assertTrue(is_english("ENG"))
+        self.assertFalse(is_english("fre"))
+        self.assertFalse(is_english("spa"))
+        self.assertFalse(is_english("jpn"))
+
+    def test_find_sidecar_subtitles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            video = base / "Movie.mkv"
+            video.touch()
+            make_subtitle(base / "Movie.srt")
+            make_subtitle(base / "Movie.en.srt")
+            make_subtitle(base / "Movie.fr.srt")
+            make_subtitle(base / "Other.srt")  # unrelated video, must be ignored
+
+            found = {s.path.name: s for s in find_sidecar_subtitles(video)}
+            self.assertEqual(set(found), {"Movie.srt", "Movie.en.srt", "Movie.fr.srt"})
+            self.assertTrue(found["Movie.srt"].is_english)
+            self.assertTrue(found["Movie.en.srt"].is_english)
+            self.assertFalse(found["Movie.fr.srt"].is_english)
+
+    def test_find_sidecar_subtitles_none_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "Lonely.mkv"
+            video.touch()
+            self.assertEqual(find_sidecar_subtitles(video), [])
+
+
+class TestSubtitleTrackSerialisation(unittest.TestCase):
+    def test_json_roundtrip_preserves_subtitle_tracks(self):
+        video = VideoFile(
+            path="/x/y.mkv", size=10, mtime=0.0,
+            subtitle_tracks=[SubtitleTrack(index=2, language="eng", codec="subrip")],
+        )
+        restored = VideoFile.from_json(video.to_json())
+        self.assertEqual(restored.subtitle_tracks, [SubtitleTrack(index=2, language="eng", codec="subrip")])
+
+
+class TestBloatedFilter(unittest.TestCase):
+    """The --bloated convenience filter: 4K files, or any heavy-bpp encode."""
+
+    def test_bloated_matches_4k_and_heavy_bpp_but_not_efficient(self):
+        fourk = VideoFile(path="/a.mkv", size=1, mtime=0.0, width=3840, height=2160,
+                          fps=24.0, vbitrate=1_000_000)
+        heavy = VideoFile(path="/b.mkv", size=1, mtime=0.0, width=1920, height=1080,
+                          fps=24.0, vbitrate=int(0.20 * 1920 * 1080 * 24))
+        efficient = VideoFile(path="/c.mkv", size=1, mtime=0.0, width=1920, height=1080,
+                              fps=24.0, vbitrate=int(0.05 * 1920 * 1080 * 24))
+        f = Filter(bloated=True)
+        self.assertTrue(f.matches(fourk))
+        self.assertTrue(f.matches(heavy))
+        self.assertFalse(f.matches(efficient))
 
 
 if __name__ == "__main__":

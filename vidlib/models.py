@@ -112,6 +112,16 @@ _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 
 
 @dataclass(slots=True)
+class SubtitleTrack:
+    """One embedded subtitle stream, kept separately from the aggregate
+    counts so a conversion can map streams individually by language."""
+
+    index: int               # absolute ffprobe stream index, for "-map 0:<index>"
+    language: str | None = None
+    codec: str | None = None
+
+
+@dataclass(slots=True)
 class VideoFile:
     """One video file on disk plus its probed metadata."""
 
@@ -141,6 +151,7 @@ class VideoFile:
     abitrate_total: int | None = None
     audio_langs: list[str] = field(default_factory=list)
     sub_langs: list[str] = field(default_factory=list)
+    subtitle_tracks: list[SubtitleTrack] = field(default_factory=list)
     n_audio: int = 0
     n_subs: int = 0
     # Bookkeeping
@@ -289,4 +300,9 @@ class VideoFile:
         """Tolerant of records written by an older or newer schema."""
         data = json.loads(blob)
         known = {f for f in cls.__dataclass_fields__}
-        return cls(**{k: v for k, v in data.items() if k in known})
+        data = {k: v for k, v in data.items() if k in known}
+        if "subtitle_tracks" in data:
+            data["subtitle_tracks"] = [
+                SubtitleTrack(**t) for t in data["subtitle_tracks"]
+            ]
+        return cls(**data)

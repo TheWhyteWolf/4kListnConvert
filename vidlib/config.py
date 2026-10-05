@@ -32,7 +32,9 @@ class Config:
     copy_audio: bool = True
     audio_codec: str = "aac"
     audio_bitrate: str = "192k"
+    audio_channels: int = 0         # 0 keeps the source channel count
     copy_subs: bool = True
+    sub_language: str = "eng"       # "eng" filters to English; empty keeps everything
     retag_codec: bool = True
     container: str = ""             # empty means "same as source"
     min_size: str = "50M"           # skip samples and clips

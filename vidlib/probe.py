@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from .models import VideoFile
+from .models import SubtitleTrack, VideoFile
 
 
 class FFmpegMissing(RuntimeError):
@@ -177,6 +177,12 @@ def probe_file(path: str | Path, timeout: float = 90.0) -> VideoFile:
             lang = (stream.get("tags") or {}).get("language")
             if lang and lang not in record.sub_langs:
                 record.sub_langs.append(lang)
+            abs_index = _to_int(stream.get("index"))
+            record.subtitle_tracks.append(SubtitleTrack(
+                index=abs_index if abs_index is not None else len(record.subtitle_tracks),
+                language=_clean(lang),
+                codec=_clean(stream.get("codec_name")),
+            ))
 
     if audio_bitrates:
         # Scale up when only some tracks reported a bitrate, so the total is

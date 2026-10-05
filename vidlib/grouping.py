@@ -116,6 +116,7 @@ class Filter:
     only_4k: bool = False
     only_hdr: bool = False
     exclude_hdr: bool = False
+    bloated: bool = False
     min_size: int = 0
     max_size: int = 0
     min_bitrate: float = 0.0
@@ -124,8 +125,15 @@ class Filter:
     under: str = ""
     include_errors: bool = False
 
+    # Bits-per-pixel at or above which an encode at its own resolution is
+    # "heavy" in the efficiency grouping - i.e. re-encoding would shrink it
+    # with no visible loss, the same promise 4K-to-1080p makes by resolution.
+    BLOATED_BPP = 0.15
+
     def matches(self, video: VideoFile) -> bool:
         if video.probe_error and not self.include_errors:
+            return False
+        if self.bloated and not (video.is_4k or (video.bits_per_pixel or 0) >= self.BLOATED_BPP):
             return False
         if self.only_4k and not video.is_4k:
             return False

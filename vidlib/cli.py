@@ -52,6 +52,9 @@ def add_filter_args(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("filters")
     group.add_argument("--4k", dest="only_4k", action="store_true",
                        help="only 2160p/4320p files")
+    group.add_argument("--bloated", action="store_true",
+                       help="4K files, or any file whose encode is inefficient for its own "
+                            "resolution (bpp >= 0.15) -- in short, 'worth re-encoding'")
     group.add_argument("-r", "--resolution", action="append", default=[],
                        metavar="RES", help="e.g. 2160p (repeatable)")
     group.add_argument("-c", "--codec", action="append", default=[],
@@ -82,6 +85,7 @@ def build_filter(args) -> Filter:
         codecs={c.lower() for c in (args.codec or [])},
         containers={c.lower().lstrip(".") for c in (args.container or [])},
         only_4k=args.only_4k,
+        bloated=args.bloated,
         only_hdr=args.hdr,
         exclude_hdr=args.sdr,
         min_size=size(args.min_size),
@@ -669,14 +673,19 @@ def cmd_convert(args, config: Config) -> int:
         if disposal == trash.QUARANTINE and not quarantine_dir:
             return fail("--disposal quarantine needs --quarantine-dir (or set it in the config)")
 
+        audio_channels = args.audio_channels or (2 if args.stereo else config.audio_channels or None)
+        sub_language = "" if args.all_subs else (args.sub_lang or config.sub_language)
+
         plans: list[ConversionPlan] = []
         for video in files:
             plans.append(plan_conversion(
                 video, encoder=encoder, quality=quality, preset=preset,
                 target_height=args.target_height, tonemap=args.tonemap or config.tonemap,
-                copy_audio=not args.reencode_audio,
+                copy_audio=not (args.reencode_audio or args.stereo or args.audio_channels),
                 audio_codec=config.audio_codec, audio_bitrate=config.audio_bitrate,
-                copy_subs=config.copy_subs, disposal=disposal,
+                audio_channels=audio_channels,
+                copy_subs=config.copy_subs, sub_language=sub_language or None,
+                disposal=disposal,
                 quarantine_dir=quarantine_dir,
                 container=args.container_out or config.container or None,
                 retag_codec=config.retag_codec,
@@ -716,8 +725,8 @@ DISPOSAL_PHRASE = {
 
 def _has_filters(args) -> bool:
     return bool(
-        args.only_4k or args.resolution or args.codec or args.container or args.hdr
-        or args.sdr or args.min_size or args.max_size or args.min_bitrate
+        args.only_4k or args.bloated or args.resolution or args.codec or args.container
+        or args.hdr or args.sdr or args.min_size or args.max_size or args.min_bitrate
         or args.min_bpp or args.match or args.under
     )
 
@@ -926,6 +935,16 @@ def build_parser() -> argparse.ArgumentParser:
                                 help="output container, e.g. mkv")
     convert_parser.add_argument("--reencode-audio", action="store_true",
                                 help="re-encode audio instead of copying it")
+    convert_parser.add_argument("--stereo", action="store_true",
+                                help="downmix audio to stereo (implies --reencode-audio; "
+                                     "channel count can't be changed by a stream copy)")
+    convert_parser.add_argument("--audio-channels", type=int, metavar="N",
+                                help="force a specific channel count instead of 2")
+    convert_parser.add_argument("--sub-lang", metavar="LANG",
+                                help="keep only subtitles tagged this language, "
+                                     "embedded or sidecar (default: eng)")
+    convert_parser.add_argument("--all-subs", action="store_true",
+                                help="keep every subtitle regardless of language")
     convert_parser.add_argument("-n", "--dry-run", action="store_true",
                                 help="show the plan without converting")
     convert_parser.add_argument("-y", "--yes", action="store_true", help="skip confirmation")
